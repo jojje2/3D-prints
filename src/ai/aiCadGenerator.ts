@@ -23,7 +23,7 @@ export function getApiUsageRecord(): ApiUsageRecord {
     totalCandidateTokens: 0,
     estimatedCostUsd: 0,
     monthlyCreditLimitUsd: 40,
-    lastModelUsed: 'gemini-2.5-flash',
+    lastModelUsed: 'gemini-3.8-flash',
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -227,7 +227,7 @@ async function callGeminiEndpoint(
 export async function generateCadWithGemini(
   options: AiCadGenerateOptions
 ): Promise<AiCadGenerateResponse> {
-  const modelName = options.modelName || 'gemini-2.5-flash';
+  const modelName = options.modelName || 'gemini-3.8-flash';
 
   const pinsSection =
     options.pins.length > 0

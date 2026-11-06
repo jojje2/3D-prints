@@ -1,8 +1,8 @@
 {
-  "hasEncryptedVault": false,
-  "ciphertext": "",
-  "salt": "",
-  "iv": "",
+  "hasEncryptedVault": true,
+  "ciphertext": "KrJ+L26ettzFzMw2A1OUrmcIhWAbh1YDP6f5sheiCBvdJBAzkhOixg62P6PwaVT7L2aQWqlQ8pnAXU12CQH3HTE5/P+M",
+  "salt": "nSYVcCM8SA7FDt3VekeINg==",
+  "iv": "sYhqcNHluze6rdVm",
   "hint": "Familjelösenord",
-  "updatedAt": ""
+  "updatedAt": "2026-11-06T06:26:14.988Z"
 }

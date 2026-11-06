@@ -74,7 +74,7 @@ export const App: React.FC = () => {
   // AI & Vault Security State
   const [apiKey, setApiKey] = useState<string | null>(() => getUnlockedApiKey());
   const [isVaultOpen, setIsVaultOpen] = useState<boolean>(false);
-  const [selectedAiModel, setSelectedAiModel] = useState<string>('gemini-2.5-flash');
+  const [selectedAiModel, setSelectedAiModel] = useState<string>('gemini-3.8-flash');
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
   const [usageRecord, setUsageRecord] = useState<ApiUsageRecord>(() =>
     getApiUsageRecord()

@@ -376,8 +376,8 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   onChange={(e) => onSelectAiModel(e.target.value)}
                   className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-sky-300 focus:outline-none"
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Snabb & Gratis)</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Avancerad CAD)</option>
+                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (Snabb & Gratis)</option>
+                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Avancerad CAD)</option>
                 </select>
               </div>
 
