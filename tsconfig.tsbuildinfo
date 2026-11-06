@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/ai/aicadgenerator.ts","./src/ai/cryptovault.ts","./src/cad/cadengine.ts","./src/components/cadviewer3d.tsx","./src/components/vaultmodal.tsx","./src/components/workspacesidebar.tsx","./src/models/startermodels.ts","./src/types/cad.ts"],"version":"5.6.3"}
