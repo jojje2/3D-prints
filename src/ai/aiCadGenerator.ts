@@ -88,7 +88,9 @@ VIKTIGA REGLER FÖR REPLICAD-KOD:
      * \`shape.intersect(otherShape)\`
      * \`shape.translate(dx, dy, dz)\` eller \`shape.translate([dx, dy, dz])\`
      * \`shape.rotate(angleDeg, [originX, originY, originZ], [axisX, axisY, axisZ])\`
-     * \`shape.fillet(radius)\` eller \`shape.chamfer(dist)\` (var försiktig med för stor radie så att inte OpenCascade kraschar; använd små säkra värden eller undvik fillet efter komplicerade boolean cuts om det inte behövs)
+   - VIKTIG REGEL MOT OPENCASCADE C++-FEL:
+     * UNDVIK att anropa \`.fillet()\` eller \`.chamfer()\` på 3D-kroppar efter \`.cut()\` eller \`.fuse()\`. Skapa istället rundade former i 2D med \`drawRoundedRectangle(w, h, r)\` eller \`drawCircle(r)\` innan du kör \`.sketchOnPlane(...).extrude(...)\`!
+     * Se alltid till att cylindrar och boxar som används i \`.cut()\` sticker ut minst 1 mm utanför ytan de skär igenom (så att det inte blir sammangrusade/coplanära ytor).
 3. Returnera antingen:
    \`{ shape: mySolid, name: "Modellnamn", color: "#38bdf8" }\`
    eller en array av sådana objekt om modellen har flera olikfärgade delar!

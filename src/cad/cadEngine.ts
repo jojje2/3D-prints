@@ -5,10 +5,134 @@ import type { CadModelMetrics, CadPartMesh } from '../types/cad';
 
 let ocInitPromise: Promise<boolean> | null = null;
 let isOcReady = false;
+let prototypesPatched = false;
 let lastBuiltShapes: { shape: any; name: string; color: string; opacity?: number }[] = [];
 
-const DEFAULT_FONT_URL =
-  'https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Bold.ttf';
+const LOCAL_FONT_URL = './fonts/default.ttf';
+
+/**
+ * Patches Replicad prototypes so that if AI-generated code specifies an oversized
+ * 3D fillet/chamfer radius or degenerate boolean operation that would throw an
+ * OpenCascade C++ numeric pointer exception (e.g. 10641896), it automatically retries
+ * with a smaller safe radius or preserves the unfilleted 3D solid instead of crashing!
+ */
+function patchReplicadSafetyPrototypes() {
+  if (prototypesPatched) return;
+  prototypesPatched = true;
+
+  const Shape3DProto = (replicad as any)._3DShape?.prototype;
+  if (Shape3DProto) {
+    const origFillet = Shape3DProto.fillet;
+    if (typeof origFillet === 'function') {
+      Shape3DProto.fillet = function safeFillet(radiusConfig: any, filter?: any) {
+        try {
+          return origFillet.call(this, radiusConfig, filter);
+        } catch (err1) {
+          if (typeof radiusConfig === 'number' && radiusConfig > 0.4) {
+            for (const factor of [0.4, 0.15]) {
+              try {
+                return origFillet.call(
+                  this,
+                  Math.max(0.2, Number((radiusConfig * factor).toFixed(2))),
+                  filter
+                );
+              } catch {
+                // continue fallback
+              }
+            }
+          }
+          console.warn(
+            'OpenCascade hoppade över 3D-fillet som var för stor för kanten:',
+            err1
+          );
+          return this;
+        }
+      };
+    }
+
+    const origChamfer = Shape3DProto.chamfer;
+    if (typeof origChamfer === 'function') {
+      Shape3DProto.chamfer = function safeChamfer(radiusConfig: any, filter?: any) {
+        try {
+          return origChamfer.call(this, radiusConfig, filter);
+        } catch (err1) {
+          if (typeof radiusConfig === 'number' && radiusConfig > 0.4) {
+            try {
+              return origChamfer.call(
+                this,
+                Math.max(0.2, Number((radiusConfig * 0.35).toFixed(2))),
+                filter
+              );
+            } catch {
+              // continue fallback
+            }
+          }
+          console.warn(
+            'OpenCascade hoppade över 3D-chamfer som var för stor för kanten:',
+            err1
+          );
+          return this;
+        }
+      };
+    }
+
+    const origShell = Shape3DProto.shell;
+    if (typeof origShell === 'function') {
+      Shape3DProto.shell = function safeShell(...args: any[]) {
+        try {
+          return origShell.apply(this, args);
+        } catch (err) {
+          console.warn('OpenCascade hoppade över shell-operation som ej gick att lösa:', err);
+          return this;
+        }
+      };
+    }
+
+    const origFuse = Shape3DProto.fuse;
+    if (typeof origFuse === 'function') {
+      Shape3DProto.fuse = function safeFuse(other: any, opts?: any) {
+        const target = other?.shape ? other.shape : other;
+        if (!target) return this;
+        try {
+          return origFuse.call(this, target, opts);
+        } catch (err) {
+          console.warn('OpenCascade fuse-varning, behåller basform:', err);
+          return this;
+        }
+      };
+    }
+
+    const origCut = Shape3DProto.cut;
+    if (typeof origCut === 'function') {
+      Shape3DProto.cut = function safeCut(tool: any, opts?: any) {
+        const target = tool?.shape ? tool.shape : tool;
+        if (!target) return this;
+        try {
+          return origCut.call(this, target, opts);
+        } catch (err) {
+          console.warn('OpenCascade cut-varning, behåller basform:', err);
+          return this;
+        }
+      };
+    }
+  }
+
+  const DrawingProto = (replicad as any).Drawing?.prototype;
+  if (DrawingProto) {
+    for (const method of ['fillet', 'chamfer']) {
+      const orig = DrawingProto[method];
+      if (typeof orig === 'function') {
+        DrawingProto[method] = function safeDrawingMod(...args: any[]) {
+          try {
+            return orig.apply(this, args);
+          } catch {
+            return this;
+          }
+        };
+      }
+    }
+  }
+}
 
 export async function initCadKernel(): Promise<boolean> {
   if (isOcReady) return true;
@@ -19,12 +143,13 @@ export async function initCadKernel(): Promise<boolean> {
       locateFile: () => opencascadeWasm,
     });
     replicad.setOC(OC);
+    patchReplicadSafetyPrototypes();
 
-    // Load default TTF font for 3D text embossing/engraving (drawText / sketchText)
+    // Load bundled TTF font for 3D text embossing/engraving (drawText / sketchText)
     try {
-      await replicad.loadFont(DEFAULT_FONT_URL, 'default');
+      await replicad.loadFont(LOCAL_FONT_URL, 'default');
     } catch (err) {
-      console.warn('Could not load remote TTF font for drawText, continuing without font:', err);
+      console.warn('Kunde inte ladda lokal TTF-font:', err);
     }
 
     isOcReady = true;
@@ -41,6 +166,54 @@ export interface CadBuildResult {
 }
 
 /**
+ * Creates a safe proxy around replicad helper functions so zero/negative radii
+ * or oversized corner radii in drawRoundedRectangle never trigger C++ exceptions.
+ */
+function createSafeReplicadHelpers() {
+  return {
+    ...replicad,
+    drawRectangle: (w: number, h: number) =>
+      replicad.drawRectangle(
+        Math.max(0.2, Math.abs(Number(w) || 10)),
+        Math.max(0.2, Math.abs(Number(h) || 10))
+      ),
+    drawRoundedRectangle: (w: number, h: number, r: any = 2) => {
+      const safeW = Math.max(0.5, Math.abs(Number(w) || 10));
+      const safeH = Math.max(0.5, Math.abs(Number(h) || 10));
+      const maxAllowedR = Math.min(safeW, safeH) * 0.46;
+      const requestedR = typeof r === 'number' ? Math.abs(r) : 2;
+      const safeR = Math.max(0, Math.min(requestedR, maxAllowedR));
+      if (safeR < 0.05) {
+        return replicad.drawRectangle(safeW, safeH);
+      }
+      return replicad.drawRoundedRectangle(safeW, safeH, safeR);
+    },
+    drawCircle: (r: number) =>
+      replicad.drawCircle(Math.max(0.1, Math.abs(Number(r) || 5))),
+    makeBaseBox: (x: number, y: number, z: number) =>
+      replicad.makeBaseBox(
+        Math.max(0.2, Math.abs(Number(x) || 10)),
+        Math.max(0.2, Math.abs(Number(y) || 10)),
+        Math.max(0.2, Math.abs(Number(z) || 10))
+      ),
+    makeCylinder: (
+      radius: number,
+      height: number,
+      location?: [number, number, number],
+      direction?: [number, number, number]
+    ) =>
+      replicad.makeCylinder(
+        Math.max(0.1, Math.abs(Number(radius) || 2)),
+        Math.max(0.1, Math.abs(Number(height) || 10)),
+        location,
+        direction
+      ),
+    makeSphere: (radius: number) =>
+      replicad.makeSphere(Math.max(0.1, Math.abs(Number(radius) || 5))),
+  };
+}
+
+/**
  * Executes Replicad CAD code with the given parameters and extracts
  * Three.js-ready meshes, sharp B-Rep edges, and millimeter metrics.
  */
@@ -51,8 +224,8 @@ export async function executeCadCode(
   const t0 = performance.now();
   await initCadKernel();
 
-  // Provide both `replicad.*` and destructured top-level helpers so AI-generated
-  // scripts work whether they call `makeBaseBox()` or `replicad.makeBaseBox()`.
+  const safeReplicad = createSafeReplicadHelpers();
+
   const wrappedCode = `
     const {
       draw,
@@ -68,7 +241,7 @@ export async function executeCadCode(
       sketchCircle,
       sketchPolysides,
       sketchText,
-       sketchHelix,
+      sketchHelix,
       Sketcher,
       FaceSketcher,
       Blueprint,
@@ -102,22 +275,25 @@ export async function executeCadCode(
     if (typeof main === 'function') {
       return main(replicad, params);
     }
-    throw new Error('CAD-koden måste antingen returnera en 3D-form direkt eller definiera funktionen buildModel(params).');
+    throw new Error('CAD-koden måste definiera funktionen buildModel(params, replicad).');
   `;
 
   let rawResult: any;
   try {
     const runner = new Function('replicad', 'params', wrappedCode);
-    rawResult = await runner(replicad, { ...params });
+    rawResult = await runner(safeReplicad, { ...params });
   } catch (err: any) {
-    throw new Error(`CAD-körningsfel: ${err?.message || String(err)}`);
+    const errText =
+      typeof err === 'number'
+        ? `OpenCascade C++ geometrifel (kod ${err}) — troligen en ogiltig skiss, extrudering eller boolean-operation.`
+        : err?.message || String(err);
+    throw new Error(`CAD-körningsfel: ${errText}`);
   }
 
   if (!rawResult) {
     throw new Error('CAD-funktionen returnerade ingen 3D-modell (null/undefined).');
   }
 
-  // Normalize output into an array of { shape, name, color, opacity }
   const normalizedItems: { shape: any; name: string; color: string; opacity?: number }[] = [];
   const itemsArray = Array.isArray(rawResult) ? rawResult : [rawResult];
 
@@ -183,7 +359,6 @@ export async function executeCadCode(
         maxZ = Math.max(maxZ, bz2);
       }
     } catch {
-      // Fallback bounds from vertices
       for (let i = 0; i < meshData.vertices.length; i += 3) {
         const vx = meshData.vertices[i];
         const vy = meshData.vertices[i + 1];
@@ -200,7 +375,7 @@ export async function executeCadCode(
     try {
       totalVolumeMm3 += replicad.measureVolume(shape);
     } catch {
-      // ignore if shell/open shape
+      // ignore if open shell
     }
   }
 
@@ -249,10 +424,6 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
   }, 300);
 }
 
-/**
- * Exports the active 3D B-Rep solid as an ISO-10303-21 .STEP file
- * that opens natively as an editable solid body in Autodesk Fusion 360.
- */
 export function downloadSTEPFile(modelName: string) {
   const shape = getExportShape();
   const blob = shape.blobSTEP();
@@ -260,9 +431,6 @@ export function downloadSTEPFile(modelName: string) {
   triggerBrowserDownload(blob, `${safeName}.step`);
 }
 
-/**
- * Exports the active 3D model as a binary or ASCII .STL file for 3D printing slicers.
- */
 export function downloadSTLFile(
   modelName: string,
   quality: 'fine' | 'standard' | 'draft' = 'fine'
