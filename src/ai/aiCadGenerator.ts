@@ -154,35 +154,55 @@ async function callGeminiEndpoint(
   modelName: string,
   userContent: string
 ): Promise<{ parsed: any; usage: ApiUsageRecord }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(
-    apiKey.trim()
-  )}`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: REPLICAD_SYSTEM_PROMPT }],
+  const cleanKey = apiKey.trim();
+  const payloadBody = JSON.stringify({
+    systemInstruction: {
+      parts: [{ text: REPLICAD_SYSTEM_PROMPT }],
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: userContent }],
       },
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: userContent }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-      },
-    }),
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+    },
   });
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    let msg = `Gemini API-fel (${res.status})`;
+  // Support both Google AI Studio (generativelanguage) and Vertex AI Express / Builders Hub (aiplatform) keys (AQ.Ab8RN... / AIza...)
+  const endpoints = cleanKey.startsWith('AQ.')
+    ? [
+        `https://aiplatform.googleapis.com/v1/publishers/google/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+      ]
+    : [
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+        `https://aiplatform.googleapis.com/v1/publishers/google/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+      ];
+
+  let lastRes: Response | null = null;
+  let lastErrBody = '';
+
+  for (const url of endpoints) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payloadBody,
+    });
+    if (res.ok) {
+      lastRes = res;
+      break;
+    }
+    lastRes = res;
+    lastErrBody = await res.text();
+  }
+
+  if (!lastRes || !lastRes.ok) {
+    let msg = `Gemini API-fel (${lastRes?.status || 'Network'})`;
     try {
-      const errJson = JSON.parse(errBody);
+      const errJson = JSON.parse(lastErrBody);
       msg = errJson?.error?.message || msg;
     } catch {
       // ignore
@@ -190,7 +210,7 @@ async function callGeminiEndpoint(
     throw new Error(msg);
   }
 
-  const data = await res.json();
+  const data = await lastRes.json();
   const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   if (!rawText) {
     throw new Error('AI-modellen returnerade ett tomt svar.');

@@ -70,8 +70,9 @@ export const VaultModal: React.FC<VaultModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!newApiKey.trim().startsWith('AIza')) {
-      setErrorMsg('En giltig Google Gemini API-nyckel börjar normalt med "AIza...".');
+    const trimmedKey = newApiKey.trim();
+    if (trimmedKey.length < 12) {
+      setErrorMsg('Klistra in hela din Google API-nyckel (t.ex. "AQ.Ab8RN..." eller "AIza...").');
       return;
     }
     if (newPassword.trim().length < 4) {
@@ -265,13 +266,13 @@ export const VaultModal: React.FC<VaultModalProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Google Gemini API-nyckel (börjar med AIza...)
+                  Google Gemini API-nyckel (t.ex. AQ.Ab8RN... eller AIza...)
                 </label>
                 <input
                   type="password"
                   value={newApiKey}
                   onChange={(e) => setNewApiKey(e.target.value)}
-                  placeholder="AIzaSy..."
+                  placeholder="AQ.Ab8RN... eller AIzaSy..."
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs font-mono"
                 />
               </div>
