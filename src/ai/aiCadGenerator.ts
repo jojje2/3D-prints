@@ -149,6 +149,54 @@ function extractJsonObject(text: string): any {
   }
 }
 
+async function discoverAvailableModels(cleanKey: string): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const models: any[] = data?.models || [];
+    const supported = models
+      .filter(
+        (m) =>
+          Array.isArray(m.supportedGenerationMethods) &&
+          m.supportedGenerationMethods.includes('generateContent') &&
+          typeof m.name === 'string' &&
+          m.name.includes('gemini') &&
+          !m.name.includes('tts') &&
+          !m.name.includes('image') &&
+          !m.name.includes('vision') &&
+          !m.name.includes('embedding')
+      )
+      .map((m) => (m.name as string).replace(/^models\//, ''));
+
+    // Prioritize newer 3.x flash/lite models that have active free quota and low load
+    supported.sort((a, b) => {
+      const score = (name: string) => {
+        let s = 0;
+        if (name.includes('3.8')) s += 40;
+        else if (name.includes('3.5')) s += 35;
+        else if (name.includes('3.1')) s += 30;
+        else if (name.includes('3.0') || name.includes('gemini-3')) s += 25;
+        if (name.includes('flash-lite') || name.includes('lite')) s += 15;
+        else if (name.includes('flash')) s += 20;
+        if (name.includes('exp') || name.includes('preview')) s -= 2;
+        return s;
+      };
+      return score(b) - score(a);
+    });
+
+    return supported;
+  } catch {
+    return [];
+  }
+}
+
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function callGeminiEndpoint(
   apiKey: string,
   modelName: string,
@@ -171,38 +219,51 @@ async function callGeminiEndpoint(
     },
   });
 
+  // Discover all active generateContent models on this key so we can auto-hop if one model has 503 High Demand or limit: 0
+  const discovered = await discoverAvailableModels(cleanKey);
+  const defaultFallbacks = [
+    modelName,
+    'gemini-3.8-flash',
+    'gemini-3.8-flash-lite',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-flash-preview',
+    'gemini-2.5-flash-lite',
+  ];
+
+  const modelsToTry = Array.from(new Set([...defaultFallbacks, ...discovered]));
+
   let lastRes: Response | null = null;
   let lastErrBody = '';
 
-  // If user selected Pro on a Free Tier key where Pro has limit: 0, automatically fall back to gemini-3.8-flash
-  const modelsToTry =
-    modelName === 'gemini-3.1-pro-preview'
-      ? ['gemini-3.1-pro-preview', 'gemini-3.8-flash']
-      : [modelName];
-
   outerLoop: for (const candidateModel of modelsToTry) {
-    const candidateEndpoints = cleanKey.startsWith('AQ.')
-      ? [
-          `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-          `https://aiplatform.googleapis.com/v1/publishers/google/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-        ]
-      : [
-          `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-        ];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(
+      cleanKey
+    )}`;
 
-    for (const url of candidateEndpoints) {
+    // Up to 2 attempts per model if it returns 503 High Demand
+    for (let attempt = 0; attempt < 2; attempt++) {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payloadBody,
       });
+
       if (res.ok) {
         lastRes = res;
         modelName = candidateModel;
         break outerLoop;
       }
+
       lastRes = res;
       lastErrBody = await res.text();
+
+      // If 503 High Demand on first attempt, wait 1.2s and retry once before hopping to next model
+      if (res.status === 503 && attempt === 0) {
+        await sleep(1200);
+        continue;
+      }
+      // Otherwise (404 deprecated, 429 limit:0, or second 503), hop immediately to next available model
+      break;
     }
   }
 
