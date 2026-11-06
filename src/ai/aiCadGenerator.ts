@@ -171,32 +171,39 @@ async function callGeminiEndpoint(
     },
   });
 
-  // Support both Google AI Studio (generativelanguage) and Vertex AI Express / Builders Hub (aiplatform) keys (AQ.Ab8RN... / AIza...)
-  const endpoints = cleanKey.startsWith('AQ.')
-    ? [
-        `https://aiplatform.googleapis.com/v1/publishers/google/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-      ]
-    : [
-        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-        `https://aiplatform.googleapis.com/v1/publishers/google/models/${modelName}:generateContent?key=${encodeURIComponent(cleanKey)}`,
-      ];
-
   let lastRes: Response | null = null;
   let lastErrBody = '';
 
-  for (const url of endpoints) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payloadBody,
-    });
-    if (res.ok) {
+  // If user selected Pro on a Free Tier key where Pro has limit: 0, automatically fall back to gemini-3.8-flash
+  const modelsToTry =
+    modelName === 'gemini-3.1-pro-preview'
+      ? ['gemini-3.1-pro-preview', 'gemini-3.8-flash']
+      : [modelName];
+
+  outerLoop: for (const candidateModel of modelsToTry) {
+    const candidateEndpoints = cleanKey.startsWith('AQ.')
+      ? [
+          `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+          `https://aiplatform.googleapis.com/v1/publishers/google/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+        ]
+      : [
+          `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent?key=${encodeURIComponent(cleanKey)}`,
+        ];
+
+    for (const url of candidateEndpoints) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payloadBody,
+      });
+      if (res.ok) {
+        lastRes = res;
+        modelName = candidateModel;
+        break outerLoop;
+      }
       lastRes = res;
-      break;
+      lastErrBody = await res.text();
     }
-    lastRes = res;
-    lastErrBody = await res.text();
   }
 
   if (!lastRes || !lastRes.ok) {
